@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mtls_demo.protocol import AgentRecord, AgentRegistration, CommandRecord, CommandResultUpdate, EnqueueCommandRequest
@@ -114,6 +114,24 @@ class StateStore:
                 "SELECT * FROM agents ORDER BY updated_at DESC, agent_id ASC"
             ).fetchall()
         return [self._agent_from_row(row) for row in rows]
+
+    def prune_stale_agents(self, stale_after_seconds: int) -> list[str]:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+        pruned: list[str] = []
+        with self._connect() as connection:
+            rows = connection.execute("SELECT agent_id, last_seen FROM agents").fetchall()
+            for row in rows:
+                last_seen = datetime.fromisoformat(row["last_seen"])
+                if last_seen < cutoff:
+                    pruned.append(row["agent_id"])
+            if pruned:
+                placeholders = ", ".join("?" for _ in pruned)
+                connection.execute(
+                    f"DELETE FROM agents WHERE agent_id IN ({placeholders})",
+                    pruned,
+                )
+                connection.commit()
+        return pruned
 
     def enqueue_command(self, request: EnqueueCommandRequest) -> CommandRecord:
         now = utc_now()

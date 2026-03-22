@@ -35,6 +35,10 @@ class ServerTUI(App[None]):
         height: 14;
     }
 
+    #command_output {
+        height: 12;
+    }
+
     Input, Button {
         margin-bottom: 1;
     }
@@ -50,9 +54,10 @@ class ServerTUI(App[None]):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, stale_after_seconds: int) -> None:
         super().__init__()
         self.store = StateStore(db_path)
+        self.stale_after_seconds = stale_after_seconds
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -65,6 +70,7 @@ class ServerTUI(App[None]):
                 yield Button("Enqueue command", id="enqueue", variant="primary")
                 yield RichLog(id="events", wrap=True)
         yield DataTable(id="commands")
+        yield RichLog(id="command_output", wrap=True)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -85,6 +91,10 @@ class ServerTUI(App[None]):
         self._log("Refreshed data")
 
     def refresh_data(self) -> None:
+        pruned = self.store.prune_stale_agents(self.stale_after_seconds)
+        for agent_id in pruned:
+            self._log(f"Removed stale agent {agent_id}")
+
         agents_table = self.query_one("#agents", DataTable)
         agents_table.clear(columns=True)
         agents_table.add_columns("Agent ID", "Display Name", "Status", "Last Seen", "Capabilities")
@@ -113,11 +123,29 @@ class ServerTUI(App[None]):
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id != "agents" or event.row_key is None:
+        if event.row_key is None:
             return
-        agent_id = str(event.row_key.value)
-        self.query_one("#agent_id", Input).value = agent_id
-        self._log(f"Selected agent {agent_id}")
+        if event.data_table.id == "agents":
+            agent_id = str(event.row_key.value)
+            self.query_one("#agent_id", Input).value = agent_id
+            self._log(f"Selected agent {agent_id}")
+            return
+        if event.data_table.id == "commands":
+            command_id = str(event.row_key.value)
+            command = self.store.get_command(command_id)
+            if command is None:
+                return
+            output = self.query_one("#command_output", RichLog)
+            output.clear()
+            output.write(f"Command: {command.command}")
+            output.write(f"Status: {command.status}")
+            output.write(f"Exit code: {'-' if command.exit_code is None else command.exit_code}")
+            output.write("")
+            output.write("STDOUT:")
+            output.write(command.stdout or "<empty>")
+            output.write("")
+            output.write("STDERR:")
+            output.write(command.stderr or "<empty>")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "enqueue":
@@ -158,8 +186,9 @@ class ServerTUI(App[None]):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the server-side TUI")
     parser.add_argument("--db-path", default="demo.sqlite3")
+    parser.add_argument("--stale-after-seconds", type=int, default=60)
     args = parser.parse_args()
-    ServerTUI(args.db_path).run()
+    ServerTUI(args.db_path, args.stale_after_seconds).run()
 
 
 if __name__ == "__main__":
