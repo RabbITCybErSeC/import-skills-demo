@@ -72,7 +72,7 @@ REQUEST_CHANGES | COMMENT | APPROVE
 - Feedback is reproducible and actionable.
 - Final verdict matches evidence.
 
-## At the end always run the following validation.
+## MUST RUN!: At the end always run the following validation.
 
 - 1. git status format in
 ```
