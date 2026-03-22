@@ -1,5 +1,4 @@
-from mtls_demo.agent.client import execute_command
-from mtls_demo.protocol import CommandRecord
+from mtls_demo.agent.client import CommandRecord, execute_command
 
 
 def make_command(command: str, timeout_seconds: int = 2) -> CommandRecord:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import ssl
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,6 +9,13 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 
+from mtls_demo.auth import (
+    AUTH_AGENT_HEADER,
+    AUTH_SIGNATURE_HEADER,
+    AUTH_TIMESTAMP_HEADER,
+    resolve_shared_secret,
+    verify_signature,
+)
 from mtls_demo.protocol import AgentRecord, AgentRegistration, CommandLease, CommandRecord, CommandResultUpdate, EnqueueCommandRequest
 from mtls_demo.state import StateStore
 
@@ -15,7 +23,29 @@ from mtls_demo.state import StateStore
 DEFAULT_DB_PATH = Path("demo.sqlite3")
 
 
-def create_app(db_path: str = str(DEFAULT_DB_PATH)) -> FastAPI:
+async def verify_agent_auth(request: Request, expected_agent_id: str | None = None) -> str:
+    agent_id = request.headers.get(AUTH_AGENT_HEADER, "")
+    timestamp = request.headers.get(AUTH_TIMESTAMP_HEADER, "")
+    signature = request.headers.get(AUTH_SIGNATURE_HEADER, "")
+    if not agent_id or not timestamp or not signature:
+        raise HTTPException(status_code=401, detail="Missing authentication headers")
+    if expected_agent_id is not None and agent_id != expected_agent_id:
+        raise HTTPException(status_code=403, detail="Agent identity mismatch")
+    body = await request.body()
+    if not verify_signature(
+        request.app.state.shared_secret,
+        request.method,
+        request.url.path,
+        agent_id,
+        timestamp,
+        signature,
+        body,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid request signature")
+    return agent_id
+
+
+def create_app(db_path: str = str(DEFAULT_DB_PATH), shared_secret: str = "dev-shared-secret") -> FastAPI:
     store = StateStore(db_path)
 
     @asynccontextmanager
@@ -25,13 +55,15 @@ def create_app(db_path: str = str(DEFAULT_DB_PATH)) -> FastAPI:
 
     app = FastAPI(title="mTLS Demo Server", version="0.1.0", lifespan=lifespan)
     app.state.store = store
+    app.state.shared_secret = shared_secret
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.post("/agents/register", response_model=AgentRecord)
-    def register_agent(registration: AgentRegistration, request: Request) -> AgentRecord:
+    async def register_agent(registration: AgentRegistration, request: Request) -> AgentRecord:
+        await verify_agent_auth(request, registration.agent_id)
         return request.app.state.store.register_agent(registration)
 
     @app.get("/agents", response_model=list[AgentRecord])
@@ -39,14 +71,16 @@ def create_app(db_path: str = str(DEFAULT_DB_PATH)) -> FastAPI:
         return request.app.state.store.list_agents()
 
     @app.post("/agents/{agent_id}/heartbeat", response_model=AgentRecord)
-    def heartbeat(agent_id: str, request: Request) -> AgentRecord:
+    async def heartbeat(agent_id: str, request: Request) -> AgentRecord:
+        await verify_agent_auth(request, agent_id)
         agent = request.app.state.store.mark_agent_seen(agent_id)
         if agent is None:
             raise HTTPException(status_code=404, detail="Agent not found")
         return agent
 
     @app.post("/agents/{agent_id}/commands/lease", response_model=CommandLease)
-    def lease_command(agent_id: str, request: Request) -> CommandLease:
+    async def lease_command(agent_id: str, request: Request) -> CommandLease:
+        await verify_agent_auth(request, agent_id)
         store: StateStore = request.app.state.store
         agent = store.mark_agent_seen(agent_id)
         if agent is None:
@@ -69,11 +103,12 @@ def create_app(db_path: str = str(DEFAULT_DB_PATH)) -> FastAPI:
         return request.app.state.store.list_commands(agent_id=agent_id, limit=limit)
 
     @app.post("/commands/{command_id}/result", response_model=CommandRecord)
-    def submit_result(command_id: str, result: CommandResultUpdate, request: Request) -> CommandRecord:
+    async def submit_result(command_id: str, result: CommandResultUpdate, request: Request) -> CommandRecord:
         store: StateStore = request.app.state.store
         command = store.get_command(command_id)
         if command is None:
             raise HTTPException(status_code=404, detail="Command not found")
+        await verify_agent_auth(request, command.agent_id)
         store.mark_agent_seen(command.agent_id)
         return store.complete_command(command_id, result)
 
@@ -81,21 +116,21 @@ def create_app(db_path: str = str(DEFAULT_DB_PATH)) -> FastAPI:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the mTLS demo server")
+    parser = argparse.ArgumentParser(description="Run the demo server")
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8443)
     parser.add_argument("--ssl-certfile", required=True)
     parser.add_argument("--ssl-keyfile", required=True)
-    parser.add_argument("--ssl-ca-certs", required=True)
-    parser.add_argument(
-        "--allow-without-client-certs",
-        action="store_true",
-        help="Disable client certificate enforcement for troubleshooting",
-    )
+    parser.add_argument("--ssl-ca-certs")
+    parser.add_argument("--shared-secret", default=os.getenv("MTLS_DEMO_SHARED_SECRET"))
+    parser.add_argument("--require-client-certs", action="store_true")
     args = parser.parse_args()
 
-    app = create_app(args.db_path)
+    if args.require_client_certs and not args.ssl_ca_certs:
+        parser.error("--ssl-ca-certs is required when --require-client-certs is set")
+
+    app = create_app(args.db_path, shared_secret=resolve_shared_secret(args.shared_secret))
     uvicorn.run(
         app,
         host=args.host,
@@ -103,7 +138,7 @@ def main() -> None:
         ssl_certfile=args.ssl_certfile,
         ssl_keyfile=args.ssl_keyfile,
         ssl_ca_certs=args.ssl_ca_certs,
-        ssl_cert_reqs=ssl.CERT_NONE if args.allow_without_client_certs else ssl.CERT_REQUIRED,
+        ssl_cert_reqs=ssl.CERT_REQUIRED if args.require_client_certs else ssl.CERT_NONE,
     )
 
 
