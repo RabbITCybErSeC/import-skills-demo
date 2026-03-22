@@ -212,16 +212,16 @@ def build_ssl_context(ca_certs: str | None, insecure: bool) -> ssl.SSLContext:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the lean self-contained demo agent")
-    parser.add_argument("--server-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--agent-id", required=True)
-    parser.add_argument("--display-name")
-    parser.add_argument("--capability", action="append", default=[])
+    parser.add_argument("--server-url", default=os.getenv("MTLS_DEMO_SERVER_URL", "http://127.0.0.1:8000"))
+    parser.add_argument("--agent-id", default=os.getenv("MTLS_DEMO_AGENT_ID", "agent-1"))
+    parser.add_argument("--display-name", default=os.getenv("MTLS_DEMO_DISPLAY_NAME", "Demo Agent"))
+    parser.add_argument("--capability", action="append", default=["shell"])
     parser.add_argument("--metadata", action="append", default=[])
-    parser.add_argument("--shared-secret")
+    parser.add_argument("--shared-secret", default=os.getenv("MTLS_DEMO_SHARED_SECRET", "demo-secret"))
     parser.add_argument("--ca-certs")
     parser.add_argument("--insecure", action="store_true")
-    parser.add_argument("--poll-interval", type=float, default=5.0)
-    parser.add_argument("--request-timeout", type=float, default=10.0)
+    parser.add_argument("--poll-interval", type=float, default=float(os.getenv("MTLS_DEMO_POLL_INTERVAL", "5")))
+    parser.add_argument("--request-timeout", type=float, default=float(os.getenv("MTLS_DEMO_REQUEST_TIMEOUT", "10")))
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 

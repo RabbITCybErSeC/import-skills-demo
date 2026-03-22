@@ -26,6 +26,7 @@ mtls-demo-tui = "mtls_demo.server.tui:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+py-modules = ["client"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
