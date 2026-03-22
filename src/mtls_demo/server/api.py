@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import ssl
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -116,29 +115,18 @@ def create_app(db_path: str = str(DEFAULT_DB_PATH), shared_secret: str = "dev-sh
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the demo server")
+    parser = argparse.ArgumentParser(description="Run the demo server over plain HTTP")
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH))
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8443)
-    parser.add_argument("--ssl-certfile", required=True)
-    parser.add_argument("--ssl-keyfile", required=True)
-    parser.add_argument("--ssl-ca-certs")
+    parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--shared-secret", default=os.getenv("MTLS_DEMO_SHARED_SECRET"))
-    parser.add_argument("--require-client-certs", action="store_true")
     args = parser.parse_args()
-
-    if args.require_client_certs and not args.ssl_ca_certs:
-        parser.error("--ssl-ca-certs is required when --require-client-certs is set")
 
     app = create_app(args.db_path, shared_secret=resolve_shared_secret(args.shared_secret))
     uvicorn.run(
         app,
         host=args.host,
         port=args.port,
-        ssl_certfile=args.ssl_certfile,
-        ssl_keyfile=args.ssl_keyfile,
-        ssl_ca_certs=args.ssl_ca_certs,
-        ssl_cert_reqs=ssl.CERT_REQUIRED if args.require_client_certs else ssl.CERT_NONE,
     )
 
 

@@ -182,7 +182,7 @@ def build_ssl_context(ca_certs: str | None, insecure: bool) -> ssl.SSLContext:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the lean demo agent")
-    parser.add_argument("--server-url", default="https://127.0.0.1:8443")
+    parser.add_argument("--server-url", default="http://127.0.0.1:8000")
     parser.add_argument("--agent-id", required=True)
     parser.add_argument("--display-name")
     parser.add_argument("--capability", action="append", default=[])

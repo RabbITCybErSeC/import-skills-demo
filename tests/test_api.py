@@ -10,12 +10,18 @@ def test_api_round_trip(tmp_path):
 
     def signed_post(client: TestClient, path: str, agent_id: str, payload: dict | None = None):
         body = b""
+        headers: dict[str, str]
         if payload is not None:
             import json
 
             body = json.dumps(payload).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+        else:
+            headers = {}
         headers = build_auth_headers(shared_secret, "POST", path, agent_id, body)
-        return client.post(path, json=payload, headers=headers)
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        return client.post(path, content=body or None, headers=headers)
 
     with TestClient(app) as client:
         response = signed_post(
