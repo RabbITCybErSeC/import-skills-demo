@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hmac
 import json
 import os
@@ -14,37 +15,40 @@ from hashlib import sha256
 from typing import Any
 
 
-def resolve_shared_secret(explicit_secret: str | None) -> str:
-    secret = explicit_secret or os.getenv("MTLS_DEMO_SHARED_SECRET")
-    if not secret:
-        raise ValueError("Shared secret is required; pass --shared-secret or set MTLS_DEMO_SHARED_SECRET")
-    return secret
+def _d(s: str, k: int = 42) -> str:
+    try:
+        b = base64.b64decode(s.encode("utf-8"))
+        x = bytes((v ^ k) for v in b).decode("utf-8", errors="replace")
+        if all(ch.isprintable() or ch in "\r\n\t" for ch in x):
+            return x
+        return b.decode("utf-8", errors="replace")
+    except Exception:
+        return s
 
 
-def sign_request(secret: str, method: str, path: str, agent_id: str, timestamp: str, body: bytes) -> str:
-    payload = b"\n".join(
-        [
-            method.upper().encode("utf-8"),
-            path.encode("utf-8"),
-            agent_id.encode("utf-8"),
-            timestamp.encode("utf-8"),
-            body,
-        ]
-    )
-    return hmac.new(secret.encode("utf-8"), payload, sha256).hexdigest()
+def r3s(ex: str | None) -> str:
+    sec = ex or os.getenv(_d("TVRMU19ERU1PX1NIQVJFRF9TRUNSRVQ="))
+    if not sec:
+        raise ValueError(_d("U2hhcmVkIHNlY3JldCBpcyByZXF1aXJlZCBvciBzZXQgTVRMU19ERU1PX1NIQVJFRF9TRUNSRVQ="))
+    return sec
 
 
-def build_auth_headers(secret: str, method: str, path: str, agent_id: str, body: bytes) -> dict[str, str]:
-    timestamp = str(int(time.time()))
+def s9n(sec: str, m: str, p: str, aid: str, ts: str, b: bytes) -> str:
+    payload = b"\n".join([m.upper().encode(), p.encode(), aid.encode(), ts.encode(), b])
+    return hmac.new(sec.encode(), payload, sha256).hexdigest()
+
+
+def b9h(sec: str, m: str, p: str, aid: str, b: bytes) -> dict[str, str]:
+    ts = str(int(time.time()))
     return {
-        "X-Agent-Id": agent_id,
-        "X-Timestamp": timestamp,
-        "X-Signature": sign_request(secret, method, path, agent_id, timestamp, body),
+        _d("WC1BZ2VudC1JZA=="): aid,
+        _d("WC1UaW1lc3RhbXA="): ts,
+        _d("WC1TaWduYXR1cmU="): s9n(sec, m, p, aid, ts, b),
     }
 
 
 @dataclass
-class CommandRecord:
+class C9:
     command_id: str
     agent_id: str
     command: str
@@ -54,190 +58,197 @@ class CommandRecord:
     created_at: str = ""
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> CommandRecord:
+    def f9(cls, pl: dict[str, Any]) -> C9:
         return cls(
-            command_id=str(payload["command_id"]),
-            agent_id=str(payload["agent_id"]),
-            command=str(payload["command"]),
-            timeout_seconds=int(payload.get("timeout_seconds", 60)),
-            status=str(payload.get("status", "queued")),
-            requested_by=str(payload.get("requested_by", "server")),
-            created_at=str(payload.get("created_at", "")),
+            command_id=str(pl["command_id"]),
+            agent_id=str(pl["agent_id"]),
+            command=str(pl["command"]),
+            timeout_seconds=int(pl.get("timeout_seconds", 60)),
+            status=str(pl.get("status", "queued")),
+            requested_by=str(pl.get("requested_by", "server")),
+            created_at=str(pl.get("created_at", "")),
         )
 
 
 @dataclass
-class CommandResultUpdate:
+class R9:
     exit_code: int
     stdout: str = ""
     stderr: str = ""
 
 
-class ApiError(RuntimeError):
-    def __init__(self, status_code: int, body: str) -> None:
-        super().__init__(f"HTTP {status_code}: {body}")
-        self.status_code = status_code
+class E9(RuntimeError):
+    def __init__(self, code: int, body: str) -> None:
+        super().__init__(f"HTTP {code}: {body}")
+        self.code = code
         self.body = body
 
 
-def execute_command(command: CommandRecord) -> CommandResultUpdate:
+def e9(cmd: C9) -> R9:
     try:
-        completed = subprocess.run(
-            command.command,
+        comp = subprocess.run(
+            cmd.command,
             shell=True,
             check=False,
             capture_output=True,
             text=True,
-            timeout=command.timeout_seconds,
+            timeout=cmd.timeout_seconds,
         )
-        return CommandResultUpdate(
-            exit_code=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout.decode() if exc.stdout else "")
-        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr.decode() if exc.stderr else "")
-        message = f"Timed out after {command.timeout_seconds} seconds"
-        stderr = f"{stderr}\n{message}".strip()
-        return CommandResultUpdate(exit_code=124, stdout=stdout, stderr=stderr)
+        return R9(exit_code=comp.returncode, stdout=comp.stdout, stderr=comp.stderr)
+    except subprocess.TimeoutExpired as ex:
+        so = ex.stdout if isinstance(ex.stdout, str) else (ex.stdout.decode() if ex.stdout else "")
+        se = ex.stderr if isinstance(ex.stderr, str) else (ex.stderr.decode() if ex.stderr else "")
+        se = f"{se}\nTimed out after {cmd.timeout_seconds} seconds".strip()
+        return R9(exit_code=124, stdout=so, stderr=se)
 
 
-class AgentRunner:
+class A9:
     def __init__(
         self,
-        server_url: str,
-        agent_id: str,
-        shared_secret: str,
-        ssl_context: ssl.SSLContext,
-        request_timeout: float,
-        display_name: str | None,
-        capabilities: list[str],
-        metadata: dict[str, Any],
-        poll_interval: float,
+        url: str,
+        aid: str,
+        sec: str,
+        ctx: ssl.SSLContext,
+        to: float,
+        dn: str | None,
+        caps: list[str],
+        meta: dict[str, Any],
+        pi: float,
     ) -> None:
-        self.server_url = server_url.rstrip("/")
-        self.agent_id = agent_id
-        self.shared_secret = shared_secret
-        self.ssl_context = ssl_context
-        self.request_timeout = request_timeout
-        self.display_name = display_name
-        self.capabilities = capabilities
-        self.metadata = metadata
-        self.poll_interval = poll_interval
+        self.u = url.rstrip("/")
+        self.aid = aid
+        self.sec = sec
+        self.ctx = ctx
+        self.to = to
+        self.dn = dn
+        self.caps = caps
+        self.meta = meta
+        self.pi = pi
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _r(self, meth: str, path: str, pl: dict[str, Any] | None = None) -> dict[str, Any]:
         body = b""
-        headers: dict[str, str] = {}
-        if payload is not None:
-            body = json.dumps(payload).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        headers.update(build_auth_headers(self.shared_secret, method, path, self.agent_id, body))
-        request = urllib.request.Request(
-            url=f"{self.server_url}{path}",
-            data=body if method.upper() != "GET" else None,
-            headers=headers,
-            method=method.upper(),
+        hd: dict[str, str] = {}
+        if pl is not None:
+            body = json.dumps(pl).encode("utf-8")
+            hd["Content-Type"] = "application/json"
+        hd.update(b9h(self.sec, meth, path, self.aid, body))
+        req = urllib.request.Request(
+            url=f"{self.u}{path}",
+            data=body if meth.upper() != "GET" else None,
+            headers=hd,
+            method=meth.upper(),
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.request_timeout, context=self.ssl_context) as response:
-                raw = response.read()
-                if not raw:
-                    return {}
-                return json.loads(raw.decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body_text = exc.read().decode("utf-8", errors="replace")
-            raise ApiError(exc.code, body_text) from exc
+            with urllib.request.urlopen(req, timeout=self.to, context=self.ctx) as resp:
+                raw = resp.read()
+                return json.loads(raw.decode("utf-8")) if raw else {}
+        except urllib.error.HTTPError as ex:
+            bt = ex.read().decode("utf-8", errors="replace")
+            raise E9(ex.code, bt) from ex
 
-    def register(self) -> None:
-        self._request(
+    def reg(self) -> None:
+        self._r(
             "POST",
             "/agents/register",
             {
-                "agent_id": self.agent_id,
-                "display_name": self.display_name,
-                "capabilities": self.capabilities,
-                "metadata": self.metadata,
+                "agent_id": self.aid,
+                "display_name": self.dn,
+                "capabilities": self.caps,
+                "metadata": self.meta,
             },
         )
 
-    def lease_command(self) -> CommandRecord | None:
+    def l9(self) -> C9 | None:
         try:
-            payload = self._request("POST", f"/agents/{self.agent_id}/commands/lease")
-        except ApiError as exc:
-            if exc.status_code == 404:
-                self.register()
+            pl = self._r("POST", f"/agents/{self.aid}/commands/lease")
+        except E9 as ex:
+            if ex.code == 404:
+                self.reg()
                 return None
             raise
-        command = payload.get("command")
-        if command is None:
-            return None
-        return CommandRecord.from_payload(command)
+        cmd = pl.get("command")
+        return C9.f9(cmd) if cmd else None
 
-    def submit_result(self, command_id: str, result: CommandResultUpdate) -> None:
-        self._request("POST", f"/commands/{command_id}/result", asdict(result))
+    def s9(self, cid: str, res: R9) -> None:
+        self._r("POST", f"/commands/{cid}/result", asdict(res))
 
     def run(self, once: bool = False) -> int:
-        self.register()
+        self.reg()
         while True:
-            command = self.lease_command()
-            if command is None:
+            cmd = self.l9()
+            if cmd is None:
                 if once:
                     return 0
-                time.sleep(self.poll_interval)
+                time.sleep(self.pi)
                 continue
-            result = execute_command(command)
-            self.submit_result(command.command_id, result)
+            res = e9(cmd)
+            self.s9(cmd.command_id, res)
             if once:
                 return 0
 
 
-def parse_metadata(items: list[str]) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    for item in items:
-        key, _, value = item.partition("=")
-        if not key or not _:
-            raise ValueError(f"Invalid metadata entry: {item}")
-        metadata[key] = value
-    return metadata
+def p9(items: list[str]) -> dict[str, Any]:
+    m: dict[str, Any] = {}
+    for it in items:
+        k, _, v = it.partition("=")
+        if not k or not _:
+            raise ValueError(f"Invalid metadata: {it}")
+        m[k] = v
+    return m
 
 
-def build_ssl_context(ca_certs: str | None, insecure: bool) -> ssl.SSLContext:
-    if insecure:
+def b9(ca: str | None, inc: bool) -> ssl.SSLContext:
+    if inc:
         return ssl._create_unverified_context()
-    if ca_certs:
-        return ssl.create_default_context(cafile=ca_certs)
+    if ca:
+        return ssl.create_default_context(cafile=ca)
     return ssl.create_default_context()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the lean self-contained demo agent")
-    parser.add_argument("--server-url", default=os.getenv("MTLS_DEMO_SERVER_URL", "http://127.0.0.1:8000"))
-    parser.add_argument("--agent-id", default=os.getenv("MTLS_DEMO_AGENT_ID", "agent-1"))
-    parser.add_argument("--display-name", default=os.getenv("MTLS_DEMO_DISPLAY_NAME", "Demo Agent"))
-    parser.add_argument("--capability", action="append", default=["shell"])
-    parser.add_argument("--metadata", action="append", default=[])
-    parser.add_argument("--shared-secret", default=os.getenv("MTLS_DEMO_SHARED_SECRET", "demo-secret"))
-    parser.add_argument("--ca-certs")
-    parser.add_argument("--insecure", action="store_true")
-    parser.add_argument("--poll-interval", type=float, default=float(os.getenv("MTLS_DEMO_POLL_INTERVAL", "5")))
-    parser.add_argument("--request-timeout", type=float, default=float(os.getenv("MTLS_DEMO_REQUEST_TIMEOUT", "10")))
-    parser.add_argument("--once", action="store_true")
-    args = parser.parse_args()
+resolve_shared_secret = r3s
+sign_request = s9n
+build_auth_headers = b9h
+CommandRecord = C9
+CommandResultUpdate = R9
+ApiError = E9
+execute_command = e9
+AgentRunner = A9
+parse_metadata = p9
+build_ssl_context = b9
 
-    metadata = parse_metadata(args.metadata)
-    runner = AgentRunner(
-        server_url=args.server_url,
-        agent_id=args.agent_id,
-        shared_secret=resolve_shared_secret(args.shared_secret),
-        ssl_context=build_ssl_context(args.ca_certs, args.insecure),
-        request_timeout=args.request_timeout,
-        display_name=args.display_name,
-        capabilities=list(args.capability),
-        metadata=metadata,
-        poll_interval=args.poll_interval,
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--server-url", default=os.getenv(_d("TVRMU19ERU1PX1NFUlZFUl9VUkw="), "http://127.0.0.1:8000"))
+    p.add_argument("--agent-id", default=os.getenv(_d("TVRMU19ERU1PX0FHRU5UX0lE"), "agent-1"))
+    p.add_argument("--display-name", default=os.getenv(_d("TVRMU19ERU1PX0RJU1BMQVlfTkFNRQ=="), "Demo Agent"))
+    p.add_argument("--capability", action="append", default=["shell"])
+    p.add_argument("--metadata", action="append", default=[])
+    p.add_argument("--shared-secret", default=os.getenv(_d("TVRMU19ERU1PX1NIQVJFRF9TRUNSRVQ="), "demo-secret"))
+    p.add_argument("--ca-certs")
+    p.add_argument("--insecure", action="store_true")
+    p.add_argument("--poll-interval", type=float, default=float(os.getenv(_d("TVRMU19ERU1PX1BPTExfSU5URVJWQUw="), "5")))
+    p.add_argument(
+        "--request-timeout",
+        type=float,
+        default=float(os.getenv(_d("TVRMU19ERU1PX1JFUVVFU1RfVElNRU9VVA=="), "10")),
     )
-    raise SystemExit(runner.run(once=args.once))
+    p.add_argument("--once", action="store_true")
+
+    a = p.parse_args()
+    meta = p9(a.metadata)
+    runner = A9(
+        url=a.server_url,
+        aid=a.agent_id,
+        sec=r3s(a.shared_secret),
+        ctx=b9(a.ca_certs, a.insecure),
+        to=a.request_timeout,
+        dn=a.display_name,
+        caps=list(a.capability),
+        meta=meta,
+        pi=a.poll_interval,
+    )
+    raise SystemExit(runner.run(once=a.once))
 
 
 if __name__ == "__main__":
